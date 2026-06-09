@@ -123,7 +123,7 @@ class GGWaveCodec private constructor(
         try {
             mutex.lock()
             encode(message) { waveform, durationMs ->
-                audioTrack = AudioTrack.Builder()
+                val track = AudioTrack.Builder()
                     .setAudioAttributes(
                         AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -141,21 +141,22 @@ class GGWaveCodec private constructor(
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build()
 
-                audioTrack.setNotificationMarkerPosition(waveform.size / 2)
+                audioTrack = track
+                track.setNotificationMarkerPosition(waveform.size / 2)
 
-                audioTrack.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
-                    override fun onMarkerReached(track: AudioTrack?) {
+                track.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
+                    override fun onMarkerReached(t: AudioTrack?) {
                         Log.d("GGWave", "onMarkerReached")
                         if (mutex.isLocked) mutex.unlock()
                         playFinished()
                     }
 
-                    override fun onPeriodicNotification(track: AudioTrack?) {
-                        periodicNotification(track)
+                    override fun onPeriodicNotification(t: AudioTrack?) {
+                        periodicNotification(t)
                     }
                 })
-                audioTrack.play()
-                audioTrack.write(waveform, 0, waveform.size)
+                track.play()
+                track.write(waveform, 0, waveform.size)
 
                 mutex.withLock {
                     Log.d("GGWave", "onMarkerReached called, finish")
