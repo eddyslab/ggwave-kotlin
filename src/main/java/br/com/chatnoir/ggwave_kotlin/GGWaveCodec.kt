@@ -21,6 +21,25 @@ class GGWaveCodec private constructor(
 ) {
     private var continueListeningFlow: Boolean = true
 
+    /**
+     * PCM 버퍼 콜백.
+     * AudioRecord.read() 직후, GGWave 디코딩 전에 호출됩니다.
+     * 파라미터: (buffer: ByteArray, readBytes: Int)
+     *
+     * 용도: 실제 마이크 PCM 레벨(maxAmp/RMS)을 외부에서 읽기 위한 훅.
+     * 주의: IO 스레드에서 호출되므로 UI 접근 시 메인 스레드로 전환 필요.
+     *
+     * 사용 예:
+     *   codec.onPcmBuffer = { buf, len ->
+     *       val shorts = ByteBuffer.wrap(buf, 0, len)
+     *           .order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+     *       var maxAmp = 0
+     *       repeat(shorts.limit()) { maxAmp = maxOf(maxAmp, Math.abs(shorts.get().toInt())) }
+     *       val normalized = maxAmp / 32768f  // 0.0 ~ 1.0
+     *   }
+     */
+    var onPcmBuffer: ((buffer: ByteArray, readBytes: Int) -> Unit)? = null
+
     class Builder {
         private var sampleRate: Float = 48000f
         private var sampleFormatInp: Byte = GGWaveSampleFormat.I16
@@ -36,7 +55,6 @@ class GGWaveCodec private constructor(
         fun protocolId(value: Int) = apply { protocolId = value }
         fun volume(value: Int) = apply { volume = value }
 
-
         fun build(): GGWaveCodec = GGWaveCodec(
             params = GGWaveWrapper.getDefaultParameters().copy(
                 sampleRate = sampleRate,
@@ -45,14 +63,10 @@ class GGWaveCodec private constructor(
                 sampleFormatInp = sampleFormatInp,
                 sampleFormatOut = sampleFormatOut,
                 samplesPerFrame = samplesPerFrame ?: GGWaveWrapper.getDefaultParameters().samplesPerFrame,
-                //val payloadLength: Int,
-                //val soundMarkerThreshold: Float,
-                //val operatingMode: Int
             ),
             protocolId = protocolId,
             volume = volume
         )
-
     }
 
     suspend fun encode(
@@ -65,7 +79,6 @@ class GGWaveCodec private constructor(
         try {
             val payload = message.toByteArray()
             val dummyWaveform = ByteArray(1)
-            //Calculate waveform size
             val waveformSize = GGWaveWrapper.encode(
                 instance = instance,
                 payload = payload,
@@ -80,7 +93,6 @@ class GGWaveCodec private constructor(
                 throw GGWaveCodecException("transmitGGWave error on encode [$waveformSize]")
             }
 
-            //Really encode
             waveform = ByteArray(waveformSize)
             GGWaveWrapper.encode(
                 instance = instance,
@@ -141,7 +153,6 @@ class GGWaveCodec private constructor(
                     override fun onPeriodicNotification(track: AudioTrack?) {
                         periodicNotification(track)
                     }
-
                 })
                 audioTrack.play()
                 audioTrack.write(waveform, 0, waveform.size)
@@ -156,7 +167,6 @@ class GGWaveCodec private constructor(
             if (mutex.isLocked) mutex.unlock()
             audioTrack?.release()
         }
-
     }
 
     suspend fun decode(
@@ -179,7 +189,6 @@ class GGWaveCodec private constructor(
         }
         result(decodedString)
     }
-
 
     fun stopListeningFlow() {
         continueListeningFlow = false
@@ -213,6 +222,8 @@ class GGWaveCodec private constructor(
                 val decoded = ByteArray(256)
                 val read = audioRecord.read(waveform, 0, waveform.size)
                 if (read > 0) {
+                    // PCM 버퍼 콜백 — GGWave 디코딩 전에 호출 (실제 마이크 레벨 측정용)
+                    onPcmBuffer?.invoke(waveform, read)
                     val decodedLen = GGWaveWrapper.decode(instance, waveform, read, decoded)
                     if (decodedLen > 0) {
                         val decodedString = String(decoded, 0, decodedLen)
@@ -233,9 +244,6 @@ class GGWaveCodec private constructor(
         }
     }.flowOn(Dispatchers.IO)
 
-    /**
-     * Listen a GGWave message for a given time and decode it in the end of the listening.
-     */
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     suspend fun listenAndDecode(listeningTime: Long = 5000): String {
 
@@ -243,7 +251,6 @@ class GGWaveCodec private constructor(
         var result = ""
 
         try {
-
             val bufferSize = AudioRecord.getMinBufferSize(
                 params.sampleRate.toInt(),
                 AudioFormat.CHANNEL_IN_MONO,
